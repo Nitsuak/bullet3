@@ -1,0 +1,66 @@
+name: build-pybullet-wheels-cp311
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "pybullet-*"
+
+permissions:
+  contents: write  # needed to create a Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]  # Linux, Windows, macOS (Intel & Apple Silicon)
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python is only for running cibuildwheel, each platform builds its own wheels
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cibuildwheel
+        run: python -m pip install --upgrade pip cibuildwheel==2.19.0
+
+      - name: Build wheels (cp311)
+        env:
+          # Build only CPython 3.11 wheels (matches Blender 4.2/4.3)
+          CIBW_BUILD: "cp311-*"
+          # Skip PyPy & musllinux
+          CIBW_SKIP: "pp* *musllinux*"
+          # macOS: build both Intel (on macos-13) and ARM (on macos-14)
+          # (when running on each runner, cibuildwheel infers the native arch;
+          # you can also force: CIBW_ARCHS_MACOS="x86_64 arm64")
+          # Ensure proper macOS tag (macosx_11_0_*)
+          CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11"
+          # Optional sanity test after build: just import and print something
+          CIBW_TEST_COMMAND: "python -c \"import pybullet as p; print(p.getAPIVersion())\""
+        run: python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Upload wheels (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pybullet-wheels-cp311
+          path: wheelhouse/*.whl
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/pybullet-')
+    steps:
+      - name: Download wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pybullet-wheels-cp311
+          path: wheelhouse
+
+      - name: Create GitHub Release & upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wheelhouse/*.whl
+          generate_release_notes: true
