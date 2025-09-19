@@ -7,19 +7,18 @@ on:
       - "pybullet-*"
 
 permissions:
-  contents: write  # needed to create a Release and upload assets
+  contents: write  # for release upload
 
 jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]  # Linux, Windows, macOS (Intel & Apple Silicon)
+        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Python is only for running cibuildwheel, each platform builds its own wheels
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -29,31 +28,51 @@ jobs:
 
       - name: Build wheels (cp311)
         env:
-          # Build only CPython 3.11 wheels (matches Blender 4.2/4.3)
           CIBW_BUILD: "cp311-*"
-          # Skip PyPy & musllinux
           CIBW_SKIP: "pp* *musllinux*"
-          # macOS: build both Intel (on macos-13) and ARM (on macos-14)
-          # (when running on each runner, cibuildwheel infers the native arch;
-          # you can also force: CIBW_ARCHS_MACOS="x86_64 arm64")
-          # Ensure proper macOS tag (macosx_11_0_*)
           CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11"
-          # Optional sanity test after build: just import and print something
           CIBW_TEST_COMMAND: "python -c \"import pybullet as p; print(p.getAPIVersion())\""
         run: python -m cibuildwheel --output-dir wheelhouse
 
-      - name: Upload wheels (artifact)
+      # ✅ unique artifact name per matrix job
+      - name: Upload wheels (per-OS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pybullet-wheels-cp311-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          # alternatively you can set: overwrite: true
+
+  collect:
+    name: Collect wheels
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      # Download ALL artifacts that start with this prefix
+      - name: Download all per-OS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pybullet-wheels-cp311-*
+          merge-multiple: true
+          path: wheelhouse
+
+      - name: List gathered wheels
+        run: ls -al wheelhouse
+
+      # Re-upload as one combined artifact
+      - name: Upload combined wheels
         uses: actions/upload-artifact@v4
         with:
           name: pybullet-wheels-cp311
           path: wheelhouse/*.whl
 
   release:
-    needs: build
-    runs-on: ubuntu-22.04
+    name: Release wheels
+    needs: collect
     if: startsWith(github.ref, 'refs/tags/pybullet-')
+    runs-on: ubuntu-22.04
     steps:
-      - name: Download wheels artifact
+      - name: Download combined wheels
         uses: actions/download-artifact@v4
         with:
           name: pybullet-wheels-cp311
